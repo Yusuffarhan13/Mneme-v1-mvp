@@ -50,30 +50,30 @@ from training.data_processor import DataProcessor
 
 
 @dataclass
-class RTX6000Config:
-    """QLoRA config for RTX 6000 Pro 96GB - FAST training."""
+class H200Config:
+    """QLoRA config for H200 141GB - BALANCED speed + quality."""
 
     # Model
     model_name: str = "Qwen/Qwen3-4B"
 
-    # QLoRA settings
+    # QLoRA settings - balanced for quality
     use_qlora: bool = True
-    lora_r: int = 32  # Smaller rank = faster
-    lora_alpha: int = 64  # LoRA alpha
+    lora_r: int = 48  # Good capacity
+    lora_alpha: int = 96  # LoRA alpha (2x rank)
     lora_dropout: float = 0.05
-    lora_target_modules: tuple = ("q_proj", "k_proj", "v_proj", "o_proj")  # Less modules = faster
+    lora_target_modules: tuple = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")  # All modules
 
     # Precision - 4bit quantization for QLoRA
     precision: str = "4bit"
 
-    # Batch settings - MAX SPEED
-    batch_size: int = 64  # Large batch for speed
-    gradient_accumulation_steps: int = 2  # Effective batch = 128
-    max_length: int = 384  # Shorter = faster
+    # Batch settings - H200 141GB can handle large batches
+    batch_size: int = 96  # Very large batch for H200
+    gradient_accumulation_steps: int = 2  # Effective batch = 192
+    max_length: int = 512  # Full context
 
-    # Training
-    num_epochs: int = 10  # Fewer epochs
-    learning_rate: float = 3e-4  # Higher LR = faster convergence
+    # Training - balanced
+    num_epochs: int = 15  # Good training
+    learning_rate: float = 2e-4  # Balanced LR
     min_learning_rate: float = 1e-6  # Minimum LR for cosine
     weight_decay: float = 0.01
     warmup_ratio: float = 0.05  # 5% warmup
@@ -87,7 +87,7 @@ class RTX6000Config:
     train_split: float = 0.95  # 95% train, 5% eval
 
     # Checkpointing
-    output_dir: str = "./checkpoints_qlora"
+    output_dir: str = "./checkpoints_h200"
     save_every_epochs: int = 5
     save_best: bool = True
 
@@ -139,13 +139,13 @@ class CoconutDatasetH100(Dataset):
         return self.tokenized[idx]
 
 
-class CoconutModelRTX6000(nn.Module):
-    """QLoRA model wrapper for RTX 6000 Pro 96GB - FAST training."""
+class CoconutModelH200(nn.Module):
+    """QLoRA model wrapper for H200 141GB - balanced speed + quality."""
 
     BOT_TOKEN = "<bot>"
     EOT_TOKEN = "<eot>"
 
-    def __init__(self, config: RTX6000Config):
+    def __init__(self, config: H200Config):
         super().__init__()
         self.config = config
 
@@ -240,13 +240,13 @@ class CoconutModelRTX6000(nn.Module):
         self.tokenizer.save_pretrained(path)
 
 
-class RTX6000Trainer:
-    """Optimized trainer for RTX 6000 Pro 96GB."""
+class H200Trainer:
+    """Optimized trainer for H200 141GB."""
 
     def __init__(
         self,
-        model: CoconutModelRTX6000,
-        config: RTX6000Config,
+        model: CoconutModelH200,
+        config: H200Config,
         train_data: List[Dict],
         eval_data: Optional[List[Dict]] = None
     ):
@@ -520,10 +520,10 @@ class RTX6000Trainer:
 
 def main():
     # Config
-    config = RTX6000Config()
+    config = H200Config()
 
     print("\n" + "=" * 70)
-    print("   COCONUT TRAINING - QLoRA (FAST)")
+    print("   COCONUT TRAINING - H200 141GB (BALANCED)")
     print("=" * 70)
     print(f"Model: {config.model_name}")
     print(f"QLoRA: r={config.lora_r}, alpha={config.lora_alpha}")
@@ -541,16 +541,16 @@ def main():
     set_seed(config.seed)
 
     # Load model
-    model = CoconutModelRTX6000(config)
+    model = CoconutModelH200(config)
 
     # Load data
     print("\nLoading dataset...")
     processor = DataProcessor(cache_dir="./data_cache")
     examples = processor.load_all_datasets()
 
-    # Limit dataset for FAST training
-    # 30K examples = faster training
-    MAX_EXAMPLES = 30000
+    # Limit dataset for balanced training
+    # 40K examples = good variety
+    MAX_EXAMPLES = 40000
     if len(examples) > MAX_EXAMPLES:
         print(f"Limiting dataset from {len(examples)} to {MAX_EXAMPLES} examples")
         random.shuffle(examples)
@@ -570,7 +570,7 @@ def main():
     print(f"Train: {len(train_data)}, Eval: {len(eval_data)}")
 
     # Create trainer
-    trainer = RTX6000Trainer(
+    trainer = H200Trainer(
         model=model,
         config=config,
         train_data=train_data,
