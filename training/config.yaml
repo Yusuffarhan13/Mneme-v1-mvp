@@ -1,0 +1,159 @@
+# Coconut Training Configuration
+# Fine-tuning Qwen3-4B for latent space reasoning
+
+# Model Settings
+model:
+  name: "Qwen/Qwen3-4B"
+  precision: "4bit"  # 4bit, bf16, or fp16
+  max_length: 512
+  use_sdpa: true  # Use scaled dot-product attention
+
+# QLoRA Settings
+qlora:
+  enabled: true
+  r: 64
+  alpha: 128
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+# Training Settings
+training:
+  # Multi-stage curriculum
+  num_stages: 5  # 0 = full CoT, 5 = full latent
+  epochs_per_stage: 3
+
+  # Optimization
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  lr_scheduler: "cosine"
+
+  # Batch settings
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  effective_batch_size: 32  # batch_size * gradient_accumulation
+
+  # Gradient clipping
+  max_grad_norm: 1.0
+
+  # Mixed precision
+  fp16: false
+  bf16: true
+
+# Dataset Settings
+data:
+  # Dataset sources
+  datasets:
+    - name: "gsm8k"
+      source: "casperhansen/gsm8k_synthetic_cot"
+      enabled: true
+    - name: "prontoqa"
+      source: "rencos/ProntoQA"
+      enabled: true
+    - name: "prosqa"
+      source: "declare-lab/ProsQA"
+      enabled: true
+
+  # Processing
+  cache_dir: "./data_cache"
+  train_split: 0.9
+  eval_split: 0.1
+  shuffle: true
+  seed: 42
+
+# Latent Thinking Settings
+latent:
+  # Special tokens
+  bot_token: "<bot>"
+  eot_token: "<eot>"
+
+  # Adaptive settings
+  min_steps: 3
+  max_steps: 15
+  adaptive: true  # Model learns when to stop
+
+  # Complexity mapping
+  complexity_mapping:
+    simple: 3      # <= 2 reasoning steps
+    medium: 6      # 3-4 reasoning steps
+    complex: 10    # 5-6 reasoning steps
+    very_complex: 15  # 7+ reasoning steps
+
+# Checkpointing
+checkpointing:
+  output_dir: "./checkpoints"
+  save_strategy: "epoch"
+  save_total_limit: 3
+  resume_from: null  # Path to resume training
+
+# Logging
+logging:
+  log_dir: "./logs"
+  log_steps: 50
+  eval_steps: 500
+  wandb:
+    enabled: false
+    project: "coconut-qwen"
+    name: null  # Auto-generated if null
+
+# Evaluation
+evaluation:
+  eval_batch_size: 8
+  do_eval: true
+  eval_on_start: true
+  metrics:
+    - accuracy
+    - latent_efficiency  # tokens saved vs CoT
+
+# Hardware
+hardware:
+  device: "cuda"
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+  torch_compile: false  # Disable for compatibility
+
+# Curriculum Schedule
+curriculum:
+  # Stage 0: Full chain-of-thought
+  # Stage 1: Replace 1 step with <bot>
+  # Stage 2: Replace 2 steps with <bot>
+  # ...
+  # Stage N: Full latent (all <bot> + <eot>)
+
+  stage_schedule:
+    0:
+      epochs: 3
+      description: "Full CoT baseline"
+    1:
+      epochs: 3
+      description: "1 latent token"
+    2:
+      epochs: 3
+      description: "2 latent tokens"
+    3:
+      epochs: 3
+      description: "3 latent tokens"
+    4:
+      epochs: 3
+      description: "4 latent tokens"
+    5:
+      epochs: 3
+      description: "Full latent"
+
+  # Alternative: Adaptive training (all stages mixed)
+  adaptive_training:
+    enabled: true
+    mix_ratio:
+      stage_0: 0.1  # 10% full CoT
+      stage_1: 0.15
+      stage_2: 0.2
+      stage_3: 0.2
+      stage_4: 0.2
+      stage_5: 0.15  # 15% full latent

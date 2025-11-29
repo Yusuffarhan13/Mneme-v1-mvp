@@ -1,0 +1,24 @@
+transformers>=4.57.0
+torch>=2.0.0
+bitsandbytes>=0.41.0
+accelerate>=0.20.0
+pillow
+av>=16.0.0
+psutil>=5.9.0
+
+# Performance optimizations
+# Note: flash-attn is optional - PyTorch 2.0+ has built-in SDPA support
+# Uncomment below only if you need the absolute best performance and can compile it:
+# flash-attn>=2.0.0  # 2-4x speedup (requires CUDA toolkit matching PyTorch CUDA version)
+
+# Web Search & MCP Integration
+ddgs>=9.7.0
+mcp>=1.0.0
+beautifulsoup4>=4.12.0
+lxml>=6.0.0
+httpx>=0.27.0
+markdownify>=0.12.0
+aiohttp>=3.9.0
+
+# Optional: For AWQ quantization (3x faster!)
+# autoawq>=0.2.0
