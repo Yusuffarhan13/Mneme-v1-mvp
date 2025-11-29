@@ -58,22 +58,22 @@ class RTX6000Config:
 
     # QLoRA settings
     use_qlora: bool = True
-    lora_r: int = 64  # LoRA rank
-    lora_alpha: int = 128  # LoRA alpha
+    lora_r: int = 32  # Smaller rank = faster
+    lora_alpha: int = 64  # LoRA alpha
     lora_dropout: float = 0.05
-    lora_target_modules: tuple = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+    lora_target_modules: tuple = ("q_proj", "k_proj", "v_proj", "o_proj")  # Less modules = faster
 
     # Precision - 4bit quantization for QLoRA
     precision: str = "4bit"
 
-    # Batch settings - QLoRA uses less memory, can use larger batches
-    batch_size: int = 32  # Larger batch with QLoRA
-    gradient_accumulation_steps: int = 4  # Effective batch = 128
-    max_length: int = 512  # Standard context length
+    # Batch settings - MAX SPEED
+    batch_size: int = 64  # Large batch for speed
+    gradient_accumulation_steps: int = 2  # Effective batch = 128
+    max_length: int = 384  # Shorter = faster
 
     # Training
-    num_epochs: int = 20  # Thorough training
-    learning_rate: float = 2e-4  # Higher LR for LoRA
+    num_epochs: int = 10  # Fewer epochs
+    learning_rate: float = 3e-4  # Higher LR = faster convergence
     min_learning_rate: float = 1e-6  # Minimum LR for cosine
     weight_decay: float = 0.01
     warmup_ratio: float = 0.05  # 5% warmup
@@ -96,7 +96,7 @@ class RTX6000Config:
     eval_steps: int = 500
 
     # Advanced
-    gradient_checkpointing: bool = True  # Enable for memory efficiency
+    gradient_checkpointing: bool = False  # Disable for speed (QLoRA uses less memory)
     flash_attention: bool = True  # RTX 6000 supports flash attention
     compile_model: bool = False  # Disable - causes issues
 
@@ -548,9 +548,9 @@ def main():
     processor = DataProcessor(cache_dir="./data_cache")
     examples = processor.load_all_datasets()
 
-    # Limit dataset for practical training time
-    # 50K examples = ~1.5 hours per epoch = ~2 days total
-    MAX_EXAMPLES = 50000
+    # Limit dataset for FAST training
+    # 30K examples = faster training
+    MAX_EXAMPLES = 30000
     if len(examples) > MAX_EXAMPLES:
         print(f"Limiting dataset from {len(examples)} to {MAX_EXAMPLES} examples")
         random.shuffle(examples)
