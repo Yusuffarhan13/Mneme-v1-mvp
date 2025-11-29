@@ -26,6 +26,7 @@ from tqdm import tqdm
 # RTX 6000 Pro Optimizations
 os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
 os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"  # Ada Lovelace architecture
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Avoid fork warnings
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
@@ -59,10 +60,10 @@ class RTX6000Config:
     # Precision - bf16 for efficiency
     precision: str = "bf16"
 
-    # Batch settings - RTX 6000 Pro 96GB can handle LARGER batches
-    batch_size: int = 48  # Larger batch for 96GB VRAM
-    gradient_accumulation_steps: int = 4  # Effective batch = 192
-    max_length: int = 1024  # Longer context with more VRAM
+    # Batch settings - optimized for full fine-tuning
+    batch_size: int = 16  # Safe batch size for full fine-tuning
+    gradient_accumulation_steps: int = 8  # Effective batch = 128
+    max_length: int = 512  # Standard context length
 
     # Training
     num_epochs: int = 35  # Thorough training
@@ -89,9 +90,9 @@ class RTX6000Config:
     eval_steps: int = 500
 
     # Advanced
-    gradient_checkpointing: bool = False  # 96GB is enough, disable for speed
+    gradient_checkpointing: bool = True  # Enable for memory efficiency
     flash_attention: bool = True  # RTX 6000 supports flash attention
-    compile_model: bool = True  # torch.compile for speed
+    compile_model: bool = False  # Disable - causes issues with flash attention
 
     # Seed
     seed: int = 42
