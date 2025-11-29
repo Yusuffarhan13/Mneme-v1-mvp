@@ -37,9 +37,11 @@ if torch.cuda.is_available():
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    BitsAndBytesConfig,
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup
 )
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 
@@ -49,25 +51,29 @@ from training.data_processor import DataProcessor
 
 @dataclass
 class RTX6000Config:
-    """Maxed out config for RTX 6000 Pro 96GB training."""
+    """QLoRA config for RTX 6000 Pro 96GB - FAST training."""
 
     # Model
     model_name: str = "Qwen/Qwen3-4B"
 
-    # Full fine-tuning (NO QLoRA - train everything)
-    full_finetune: bool = True
+    # QLoRA settings
+    use_qlora: bool = True
+    lora_r: int = 64  # LoRA rank
+    lora_alpha: int = 128  # LoRA alpha
+    lora_dropout: float = 0.05
+    lora_target_modules: tuple = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 
-    # Precision - bf16 for efficiency
-    precision: str = "bf16"
+    # Precision - 4bit quantization for QLoRA
+    precision: str = "4bit"
 
-    # Batch settings - optimized for full fine-tuning
-    batch_size: int = 16  # Safe batch size for full fine-tuning
-    gradient_accumulation_steps: int = 8  # Effective batch = 128
+    # Batch settings - QLoRA uses less memory, can use larger batches
+    batch_size: int = 32  # Larger batch with QLoRA
+    gradient_accumulation_steps: int = 4  # Effective batch = 128
     max_length: int = 512  # Standard context length
 
     # Training
-    num_epochs: int = 20  # Balanced training time
-    learning_rate: float = 2e-5  # Full fine-tune LR
+    num_epochs: int = 20  # Thorough training
+    learning_rate: float = 2e-4  # Higher LR for LoRA
     min_learning_rate: float = 1e-6  # Minimum LR for cosine
     weight_decay: float = 0.01
     warmup_ratio: float = 0.05  # 5% warmup
@@ -76,12 +82,12 @@ class RTX6000Config:
     # Scheduler
     scheduler_type: str = "cosine"  # cosine, linear, cosine_restarts
 
-    # Dataset - NO LIMITS
+    # Dataset
     use_full_dataset: bool = True
     train_split: float = 0.95  # 95% train, 5% eval
 
     # Checkpointing
-    output_dir: str = "./checkpoints_rtx6000"
+    output_dir: str = "./checkpoints_qlora"
     save_every_epochs: int = 5
     save_best: bool = True
 
@@ -92,7 +98,7 @@ class RTX6000Config:
     # Advanced
     gradient_checkpointing: bool = True  # Enable for memory efficiency
     flash_attention: bool = True  # RTX 6000 supports flash attention
-    compile_model: bool = False  # Disable - causes issues with flash attention
+    compile_model: bool = False  # Disable - causes issues
 
     # Seed
     seed: int = 42
@@ -134,7 +140,7 @@ class CoconutDatasetH100(Dataset):
 
 
 class CoconutModelRTX6000(nn.Module):
-    """Full fine-tuning model wrapper for RTX 6000 Pro 96GB."""
+    """QLoRA model wrapper for RTX 6000 Pro 96GB - FAST training."""
 
     BOT_TOKEN = "<bot>"
     EOT_TOKEN = "<eot>"
@@ -143,17 +149,25 @@ class CoconutModelRTX6000(nn.Module):
         super().__init__()
         self.config = config
 
-        print(f"\nLoading {config.model_name} for FULL fine-tuning...")
-        print("All parameters will be trained!")
+        print(f"\nLoading {config.model_name} with QLoRA...")
+        print("Only LoRA adapters will be trained (fast!)")
 
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
         self._add_special_tokens()
 
-        # Load model in bf16 (H100 native)
+        # 4-bit quantization config
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True
+        )
+
+        # Load model with 4-bit quantization
         self.model = AutoModelForCausalLM.from_pretrained(
             config.model_name,
-            torch_dtype=torch.bfloat16,
+            quantization_config=bnb_config,
             device_map="auto",
             attn_implementation="flash_attention_2" if config.flash_attention else "sdpa",
             use_cache=False  # Disable for training
@@ -162,22 +176,34 @@ class CoconutModelRTX6000(nn.Module):
         # Resize embeddings for special tokens
         self.model.resize_token_embeddings(len(self.tokenizer))
 
+        # Prepare for k-bit training
+        self.model = prepare_model_for_kbit_training(self.model)
+
         # Enable gradient checkpointing
         if config.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        # Unfreeze ALL parameters
-        for param in self.model.parameters():
-            param.requires_grad = True
+        # Apply LoRA
+        lora_config = LoraConfig(
+            r=config.lora_r,
+            lora_alpha=config.lora_alpha,
+            target_modules=list(config.lora_target_modules),
+            lora_dropout=config.lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
+        self.model = get_peft_model(self.model, lora_config)
 
         # Count parameters
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        trainable_pct = 100 * trainable_params / total_params
 
-        print(f"\nModel loaded!")
+        print(f"\nModel loaded with QLoRA!")
         print(f"  Total parameters: {total_params:,}")
-        print(f"  Trainable parameters: {trainable_params:,} (100%)")
-        print(f"  Precision: {config.precision}")
+        print(f"  Trainable parameters: {trainable_params:,} ({trainable_pct:.2f}%)")
+        print(f"  LoRA rank: {config.lora_r}")
+        print(f"  LoRA alpha: {config.lora_alpha}")
         print(f"  Flash Attention: {config.flash_attention}")
 
     def _add_special_tokens(self):
@@ -497,10 +523,10 @@ def main():
     config = RTX6000Config()
 
     print("\n" + "=" * 70)
-    print("   COCONUT TRAINING - RTX 6000 PRO 96GB OPTIMIZED")
+    print("   COCONUT TRAINING - QLoRA (FAST)")
     print("=" * 70)
     print(f"Model: {config.model_name}")
-    print(f"Full Fine-Tuning: {config.full_finetune} (ALL parameters)")
+    print(f"QLoRA: r={config.lora_r}, alpha={config.lora_alpha}")
     print(f"Precision: {config.precision}")
     print(f"Batch Size: {config.batch_size} x {config.gradient_accumulation_steps} = {config.batch_size * config.gradient_accumulation_steps}")
     print(f"Epochs: {config.num_epochs}")
