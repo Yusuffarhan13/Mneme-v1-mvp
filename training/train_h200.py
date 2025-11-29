@@ -66,9 +66,9 @@ class H200Config:
     # Precision - 4bit quantization for QLoRA
     precision: str = "4bit"
 
-    # Batch settings - H200 141GB can handle large batches
-    batch_size: int = 96  # Very large batch for H200
-    gradient_accumulation_steps: int = 2  # Effective batch = 192
+    # Batch settings - safe for backward pass
+    batch_size: int = 24  # Safe batch size
+    gradient_accumulation_steps: int = 4  # Effective batch = 96
     max_length: int = 512  # Full context
 
     # Training - balanced
@@ -96,8 +96,8 @@ class H200Config:
     eval_steps: int = 500
 
     # Advanced
-    gradient_checkpointing: bool = False  # Disable for speed (QLoRA uses less memory)
-    flash_attention: bool = True  # RTX 6000 supports flash attention
+    gradient_checkpointing: bool = True  # Enable to save memory
+    flash_attention: bool = True  # H200 supports flash attention
     compile_model: bool = False  # Disable - causes issues
 
     # Seed
