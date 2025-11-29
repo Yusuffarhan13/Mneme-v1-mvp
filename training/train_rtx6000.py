@@ -66,7 +66,7 @@ class RTX6000Config:
     max_length: int = 512  # Standard context length
 
     # Training
-    num_epochs: int = 35  # Thorough training
+    num_epochs: int = 20  # Balanced training time
     learning_rate: float = 2e-5  # Full fine-tune LR
     min_learning_rate: float = 1e-6  # Minimum LR for cosine
     weight_decay: float = 0.01
@@ -517,10 +517,18 @@ def main():
     # Load model
     model = CoconutModelRTX6000(config)
 
-    # Load data - FULL DATASET
-    print("\nLoading FULL dataset (no limits)...")
+    # Load data
+    print("\nLoading dataset...")
     processor = DataProcessor(cache_dir="./data_cache")
     examples = processor.load_all_datasets()
+
+    # Limit dataset for practical training time
+    # 50K examples = ~1.5 hours per epoch = ~2 days total
+    MAX_EXAMPLES = 50000
+    if len(examples) > MAX_EXAMPLES:
+        print(f"Limiting dataset from {len(examples)} to {MAX_EXAMPLES} examples")
+        random.shuffle(examples)
+        examples = examples[:MAX_EXAMPLES]
 
     print(f"Total examples: {len(examples)}")
 
