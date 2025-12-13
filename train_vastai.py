@@ -81,7 +81,7 @@ class HighQualityTrainingConfig:
     # Output
     output_dir: str = "mneme_trained"
     eval_every: int = 10
-    save_every: int = 20
+    save_every: int = 50  # Save less often to save disk space
 
     # Data
     examples_per_pattern: int = 50  # More examples
@@ -1046,8 +1046,19 @@ class HighQualityTrainer:
             status = "✓" if r["correct"] else "✗"
             print(f"  {status} {r['question'][:30]}... Expected: {r['expected']}, Got: {r['got'][:20]}")
 
-    def save_checkpoint(self, filename: str):
+    def save_checkpoint(self, filename: str, keep_only_latest_epoch: bool = True):
         path = os.path.join(self.config.output_dir, filename)
+
+        # Delete old epoch checkpoints to save disk space
+        if keep_only_latest_epoch and filename.startswith("encoder_epoch_"):
+            import glob
+            old_checkpoints = glob.glob(os.path.join(self.config.output_dir, "encoder_epoch_*.pt"))
+            for old_cp in old_checkpoints:
+                try:
+                    os.remove(old_cp)
+                except:
+                    pass
+
         torch.save({
             "encoder_state": self.encoder.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
