@@ -104,22 +104,20 @@ class MemoryEncoder(nn.Module):
         # Text embedding
         self.embed = nn.Embedding(tokenizer_vocab_size, config.encoder_hidden_size)
 
-        # Small transformer encoder
+        # Transformer encoder with pre-norm for stability
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.encoder_hidden_size,
             nhead=config.encoder_heads,
             dim_feedforward=config.encoder_hidden_size * 4,
             dropout=0.1,
             activation='gelu',
-            batch_first=True
+            batch_first=True,
+            norm_first=True  # Pre-norm for stability
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config.encoder_layers)
 
-        # Pooling
-        self.pool = nn.Sequential(
-            nn.Linear(config.encoder_hidden_size, config.encoder_hidden_size),
-            nn.GELU(),
-        )
+        # Layer norm (replaces pool for compatibility with trained models)
+        self.norm = nn.LayerNorm(config.encoder_hidden_size)
 
         # Delta generators for each target layer and each weight matrix
         # In Qwen MLP: gate_proj (h→i), up_proj (h→i), down_proj (i→h)
@@ -158,7 +156,7 @@ class MemoryEncoder(nn.Module):
         for name, param in self.named_parameters():
             if 'delta_generators' in name:
                 if 'weight' in name:
-                    nn.init.normal_(param, std=0.001)
+                    nn.init.normal_(param, std=0.002)
                 elif 'bias' in name:
                     nn.init.zeros_(param)
 
@@ -184,6 +182,7 @@ class MemoryEncoder(nn.Module):
             mask = None
 
         x = self.transformer(x, src_key_padding_mask=mask)  # (batch, seq, hidden)
+        x = self.norm(x)  # Apply layer norm
 
         # Pool (mean over sequence)
         if attention_mask is not None:
@@ -191,8 +190,6 @@ class MemoryEncoder(nn.Module):
             x = (x * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
         else:
             x = x.mean(dim=1)  # (batch, hidden)
-
-        x = self.pool(x)  # (batch, hidden)
 
         # Generate deltas
         deltas = {}

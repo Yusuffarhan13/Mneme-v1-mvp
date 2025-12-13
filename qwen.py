@@ -31,19 +31,42 @@ if torch.cuda.is_available():
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Mneme configuration
-MNEME_CONFIG = MnemeConfig(
-    delta_rank=4,  # Low rank for efficiency
-    target_layers=[8, 16, 24],  # Mid-to-late layers
-    max_memories_active=32,  # Limit for slow GPU
-    memory_path="mneme_memories"
-)
-
+# Load config from checkpoint if available
 print("=" * 50)
 print("  MNEME: Neural Episodic Weight Injection")
 print("  Facts are injected INTO model weights")
 print("  No RAG. No prompt injection. True memory.")
 print("=" * 50)
+
+# Check if we have a trained encoder to load config from
+checkpoint = None
+checkpoint_config = None
+if args.encoder and os.path.exists(args.encoder):
+    print(f"\nLoading checkpoint config from: {args.encoder}")
+    checkpoint = torch.load(args.encoder, map_location=device, weights_only=False)
+    checkpoint_config = checkpoint.get("config", {})
+    print(f"  Checkpoint config: {checkpoint_config}")
+
+# Create Mneme config (use checkpoint config if available)
+if checkpoint_config:
+    MNEME_CONFIG = MnemeConfig(
+        delta_rank=checkpoint_config.get("delta_rank", 16),
+        target_layers=checkpoint_config.get("target_layers", [4, 8, 12, 16, 20, 24]),
+        encoder_hidden_size=checkpoint_config.get("encoder_hidden_size", 768),
+        encoder_layers=checkpoint_config.get("encoder_layers", 4),
+        max_memories_active=64,
+        memory_path="mneme_memories"
+    )
+else:
+    # Default to high-quality config (matches train_vastai.py)
+    MNEME_CONFIG = MnemeConfig(
+        delta_rank=16,
+        target_layers=[4, 8, 12, 16, 20, 24],
+        encoder_hidden_size=768,
+        encoder_layers=4,
+        max_memories_active=64,
+        memory_path="mneme_memories"
+    )
 
 print("\nLoading Qwen3-4B...")
 base_model = AutoModelForCausalLM.from_pretrained(
@@ -59,13 +82,12 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 print("\nInitializing Mneme...")
 model = MnemeModel(base_model, tokenizer, MNEME_CONFIG)
 
-# Load trained encoder if provided
-if args.encoder and os.path.exists(args.encoder):
-    checkpoint = torch.load(args.encoder, map_location=device)
+# Load trained encoder if checkpoint was loaded
+if checkpoint:
     model.encoder.load_state_dict(checkpoint["encoder_state"])
     print(f"Loaded trained encoder from: {args.encoder}")
 else:
-    print("Using untrained encoder (run train_mneme.py first for best results)")
+    print("Using untrained encoder (run train_vastai.py first for best results)")
 
 # Refresh memories (apply any existing memories to weights)
 model.refresh_memories()
