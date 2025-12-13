@@ -1,7 +1,51 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# PyTorch checkpoints (large files)
+*.pt
+*.pth
+*.bin
+mneme_trained/
+memory_state.pt
+
+# Memory storage (regenerated)
+mneme_memories/
+
+# Cache
 .cache/
 data_cache/
 checkpoints*/
-*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+training_log.txt
+
+# Archives
+*.tar.gz
+*.zip
+
+# Env
 .env
