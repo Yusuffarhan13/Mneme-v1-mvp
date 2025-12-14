@@ -488,8 +488,10 @@ class MnemeModel(nn.Module):
                     if delta_key in self._current_deltas:
                         delta = self._current_deltas[delta_key]
                         # Apply delta: output += input @ delta.T
+                        # Move delta to same device AND dtype as output
                         inp = input[0] if isinstance(input, tuple) else input
-                        delta_contribution = F.linear(inp, delta.to(output.dtype))
+                        delta_gpu = delta.to(device=output.device, dtype=output.dtype)
+                        delta_contribution = F.linear(inp, delta_gpu)
                         return output + delta_contribution * 0.5  # Same scaling as weight method
                     return output
                 return hook
