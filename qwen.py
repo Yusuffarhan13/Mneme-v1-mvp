@@ -69,23 +69,64 @@ else:
     )
 
 print("\nLoading Qwen3-4B...")
-base_model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen3-4B",
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-    attn_implementation="sdpa",
-)
+
+# Check available VRAM
+if torch.cuda.is_available():
+    gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
+    print(f"GPU: {torch.cuda.get_device_name(0)} ({gpu_mem:.1f}GB)")
+else:
+    gpu_mem = 0
+
+# Use 4-bit quantization for GPUs with less than 24GB
+if gpu_mem < 24:
+    print("Using 4-bit quantization to fit in VRAM...")
+    try:
+        from transformers import BitsAndBytesConfig
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4"
+        )
+        base_model = AutoModelForCausalLM.from_pretrained(
+            "Qwen/Qwen3-4B",
+            quantization_config=quantization_config,
+            device_map="auto",
+            attn_implementation="sdpa",
+        )
+    except ImportError:
+        print("bitsandbytes not installed, trying without quantization...")
+        base_model = AutoModelForCausalLM.from_pretrained(
+            "Qwen/Qwen3-4B",
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+            attn_implementation="sdpa",
+        )
+else:
+    base_model = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen3-4B",
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        attn_implementation="sdpa",
+    )
+
 base_model.eval()
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 
 # Create Mneme model
 print("\nInitializing Mneme...")
-model = MnemeModel(base_model, tokenizer, MNEME_CONFIG)
+
+# For low VRAM, keep encoder on CPU initially
+encoder_device = "cpu" if gpu_mem < 24 else device
+model = MnemeModel(base_model, tokenizer, MNEME_CONFIG, encoder_device=encoder_device)
 
 # Load trained encoder if checkpoint was loaded
 if checkpoint:
     model.encoder.load_state_dict(checkpoint["encoder_state"])
     print(f"Loaded trained encoder from: {args.encoder}")
+    if encoder_device == "cpu":
+        print("Note: Encoder on CPU (limited VRAM). Inference will be slower.")
 else:
     print("Using untrained encoder (run train_vastai.py first for best results)")
 

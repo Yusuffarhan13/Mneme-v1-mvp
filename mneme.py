@@ -404,7 +404,7 @@ class MnemeModel(nn.Module):
     3. No prompt injection - memory is IN the weights
     """
 
-    def __init__(self, base_model, tokenizer, config: MnemeConfig = None):
+    def __init__(self, base_model, tokenizer, config: MnemeConfig = None, encoder_device: str = None):
         super().__init__()
         self.base_model = base_model
         self.tokenizer = tokenizer
@@ -414,9 +414,12 @@ class MnemeModel(nn.Module):
         self.model_device = next(base_model.parameters()).device
         self.model_dtype = next(base_model.parameters()).dtype
 
+        # Encoder device (can be different from model for low VRAM)
+        self.encoder_device = encoder_device or str(self.model_device)
+
         # Memory encoder (the hypernetwork)
         self.encoder = MemoryEncoder(self.config, tokenizer.vocab_size)
-        self.encoder.to(device=self.model_device, dtype=torch.float32)  # Encoder in fp32
+        self.encoder.to(device=self.encoder_device, dtype=torch.float32)  # Encoder in fp32
 
         # Memory bank
         self.memory_bank = MemoryBank(self.config, str(self.model_device))
