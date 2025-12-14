@@ -402,6 +402,8 @@ class MnemeModel(nn.Module):
     1. Uses MemoryEncoder to convert facts to weight deltas
     2. Applies deltas to MLP weights at inference
     3. No prompt injection - memory is IN the weights
+
+    For quantized models (4-bit), uses forward hooks instead of weight modification.
     """
 
     def __init__(self, base_model, tokenizer, config: MnemeConfig = None, encoder_device: str = None):
@@ -414,6 +416,9 @@ class MnemeModel(nn.Module):
         self.model_device = next(base_model.parameters()).device
         self.model_dtype = next(base_model.parameters()).dtype
 
+        # Detect if model is quantized (4-bit/8-bit)
+        self.is_quantized = self._detect_quantization()
+
         # Encoder device (can be different from model for low VRAM)
         self.encoder_device = encoder_device or str(self.model_device)
 
@@ -424,18 +429,76 @@ class MnemeModel(nn.Module):
         # Memory bank
         self.memory_bank = MemoryBank(self.config, str(self.model_device))
 
-        # Store original weights for restoration
-        self._original_weights = {}
-        self._save_original_weights()
+        # For quantized models: use hooks instead of weight modification
+        self._hooks = []
+        self._current_deltas = {}  # Deltas to apply via hooks
 
-        # Currently applied deltas
+        # For non-quantized models: store original weights for restoration
+        self._original_weights = {}
         self._applied_deltas = {}
+        if not self.is_quantized:
+            self._save_original_weights()
+        else:
+            self._register_hooks()
 
         print(f"Mneme initialized:")
         print(f"  - Target layers: {self.config.target_layers}")
         print(f"  - Delta rank: {self.config.delta_rank}")
         print(f"  - Encoder params: {sum(p.numel() for p in self.encoder.parameters()):,}")
         print(f"  - Existing memories: {len(self.memory_bank)}")
+        if self.is_quantized:
+            print(f"  - Mode: Hook-based (quantized model)")
+        else:
+            print(f"  - Mode: Weight modification")
+
+    def _detect_quantization(self) -> bool:
+        """Detect if the model is quantized (4-bit or 8-bit)."""
+        # Check for BitsAndBytes quantization
+        if hasattr(self.base_model, 'config'):
+            config = self.base_model.config
+            if hasattr(config, 'quantization_config'):
+                return True
+
+        # Check for quantized linear layers
+        for name, module in self.base_model.named_modules():
+            module_type = type(module).__name__
+            if 'Linear4bit' in module_type or 'Linear8bitLt' in module_type:
+                return True
+            # Check for bnb_4bit attributes
+            if hasattr(module, 'weight') and hasattr(module.weight, 'quant_state'):
+                return True
+
+        return False
+
+    def _register_hooks(self):
+        """Register forward hooks to apply deltas for quantized models."""
+        # Remove any existing hooks
+        for hook in self._hooks:
+            hook.remove()
+        self._hooks = []
+
+        # Register hooks on target layer MLPs
+        for layer_idx in self.config.target_layers:
+            layer = self.base_model.model.layers[layer_idx]
+
+            # Create hook for gate_proj
+            def make_hook(proj_type, idx):
+                def hook(module, input, output):
+                    delta_key = f"layer_{idx}_{proj_type}_full"
+                    if delta_key in self._current_deltas:
+                        delta = self._current_deltas[delta_key]
+                        # Apply delta: output += input @ delta.T
+                        inp = input[0] if isinstance(input, tuple) else input
+                        delta_contribution = F.linear(inp, delta.to(output.dtype))
+                        return output + delta_contribution * 0.5  # Same scaling as weight method
+                    return output
+                return hook
+
+            hook_gate = layer.mlp.gate_proj.register_forward_hook(make_hook("gate", layer_idx))
+            hook_up = layer.mlp.up_proj.register_forward_hook(make_hook("up", layer_idx))
+            hook_down = layer.mlp.down_proj.register_forward_hook(make_hook("down", layer_idx))
+
+            self._hooks.extend([hook_gate, hook_up, hook_down])
 
     def _save_original_weights(self):
         """Save original MLP weights for restoration."""
@@ -450,9 +513,17 @@ class MnemeModel(nn.Module):
 
         Deltas should be pre-composed full matrices (not A/B factors).
         Keys are like: "layer_8_gate_full", "layer_8_up_full", etc.
+
+        For quantized models: stores deltas for hook-based application.
+        For non-quantized models: modifies weights directly.
         """
-        # Balanced scaling - enough to influence but not destabilize
-        scaling = 0.5  # Tuned for 3 memories
+        if self.is_quantized:
+            # For quantized models, just store deltas - hooks will apply them
+            self._current_deltas = {k: v.to(self.model_device) for k, v in deltas.items()}
+            return
+
+        # For non-quantized models: modify weights directly
+        scaling = 0.5  # Balanced scaling
 
         for layer_idx in self.config.target_layers:
             layer = self.base_model.model.layers[layer_idx]
@@ -476,6 +547,12 @@ class MnemeModel(nn.Module):
 
     def _restore_weights(self):
         """Restore original weights (remove all deltas)."""
+        if self.is_quantized:
+            # For quantized models, just clear the deltas dict
+            self._current_deltas = {}
+            return
+
+        # For non-quantized models: restore from saved weights
         for layer_idx in self.config.target_layers:
             layer = self.base_model.model.layers[layer_idx]
             layer.mlp.gate_proj.weight.data = self._original_weights[f"layer_{layer_idx}_gate"].clone()
@@ -501,7 +578,8 @@ class MnemeModel(nn.Module):
             max_length=128,
             padding=True
         )
-        inputs = {k: v.to(self.model_device) for k, v in inputs.items()}
+        # Send to encoder device (may be CPU for low VRAM setups)
+        inputs = {k: v.to(self.encoder_device) for k, v in inputs.items()}
 
         # Encode to deltas
         with torch.no_grad():
@@ -540,6 +618,8 @@ class MnemeModel(nn.Module):
             "target_layers": self.config.target_layers,
             "delta_rank": self.config.delta_rank,
             "memory_path": self.config.memory_path,
+            "is_quantized": self.is_quantized,
+            "mode": "hook-based" if self.is_quantized else "weight-modification",
         }
 
     def list_memories(self) -> List[Dict]:
